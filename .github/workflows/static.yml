@@ -1,0 +1,86 @@
+name: Build and deploy to GitHub Pages
+
+# Run whenever code is pushed to main.
+# workflow_dispatch also enables the "Run workflow" button in Actions.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+# Allow the workflow to read the repository and deploy to Pages.
+# The identity token authenticates the deployment with GitHub.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one Pages deployment at a time.
+# Let an active deployment finish before starting another.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Use a GitHub-hosted Ubuntu machine for the build.
+    runs-on: ubuntu-latest
+
+    # Associate the job with the github-pages environment.
+    # The deployment step supplies the published website URL.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # Download this repository onto the build machine.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Configure the job for publishing to GitHub Pages.
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      # Install stable Rust and the target needed to compile
+      # Rust into WebAssembly for the browser.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # Install the tool that builds the WASM module and generates
+      # its JavaScript bindings. --locked uses wasm-pack's lockfile.
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      # Build the Rust crate from the repository root.
+      # --target web: generate bindings for direct browser imports.
+      # --release: use the optimized release build.
+      # --out-dir pkg: place generated files in ./pkg.
+      # --out-name: match app.js's import of ./pkg/traffic_lights.js.
+      - name: Build WASM controller
+        run: >
+          wasm-pack build
+          --target web
+          --release
+          --out-dir pkg
+          --out-name traffic_lights
+
+      # Collect the website files and generated WASM module.
+      # Publishing only dist keeps Rust build files out of the upload.
+      - name: Prepare website
+        run: |
+          mkdir -p dist
+          cp index.html app.js style.css icons.svg dist/
+          cp -r vendor pkg dist/
+
+      # Package dist as the artifact consumed by the deployment step.
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      # Publish the uploaded artifact.
+      # The id lets the environment above reference its page_url output.
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
