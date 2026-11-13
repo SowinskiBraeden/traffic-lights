@@ -5,12 +5,11 @@ use wasm_bindgen::prelude::*;
  * Descriptive comments/inspuration sourced from here:
  * https://www.cedengineering.com/userfiles/Introduction%20to%20Traffic%20Signal%20Phasing-R1.pdf
  *
- * Dual-ring, single-barrier operation:
+ * This first version uses four fixed pairs:
  * ring 1: 1 -> 2 | 3 -> 4
  * ring 2: 5 -> 6 | 7 -> 8
- * The vertical line marks the main/side street barrier. Within a barrier group
- * each ring advances on its own (e.g. 1/5 -> 2/5 -> 2/6 is normal), but both
- * rings must park at the barrier before either can cross into the next group.
+ * The vertical line marks the main/side street barrier.
+ * Each pair completes green, yellow and red clearance together.
  */
 
 /*
@@ -98,6 +97,34 @@ impl Phase {
 }
 
 /*
+ * A phase set is defined as any unique combination of
+ * vehicle or pedestrian phases that occur at the same time.
+ *
+ * Two phases are said to be simultaneous phases when they operate together for the
+ * same period of time. When one of the phases turns green, so does the other phase, and
+ * when one of the phases turns yellow, so does the other phase.
+ * Two phases are said to be concurrent phases when they operate together for some
+ * period of time, but not necessarily the same period of time
+ */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhaseSetId(u8);
+
+#[derive(Clone)]
+pub struct PhaseSet {
+    id: PhaseSetId,
+    phases: Vec<PhaseId>,
+}
+
+impl PhaseSet {
+    pub fn new(id: u8, first: PhaseId, second: PhaseId) -> Self {
+        Self {
+            id: PhaseSetId(id),
+            phases: vec![first, second],
+        }
+    }
+}
+
+/*
  * u8 bits represents phases 1-8
  * each bit indicates whether recall is active
  * for that phase (bit position)
@@ -164,66 +191,14 @@ impl TimingChart {
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interval {
-    // Also doubles as "parked at the barrier, waiting on the other ring" and
-    // the pre-startup state, since both show the same red lamp to a viewer.
     Red,
     Green,
     Yellow,
     RedClearance,
 }
 
-// Which side of the barrier a ring is currently serving.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Group {
-    A,
-    B,
-}
-
-impl Group {
-    fn flip(self) -> Self {
-        match self {
-            Group::A => Group::B,
-            Group::B => Group::A,
-        }
-    }
-}
-
-// Which of the two phases within the current barrier group a ring is on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Slot {
-    First,
-    Second,
-}
-
-// Ring 1 carries phases 1-4, ring 2 carries phases 5-8; group A is the first
-// phase pair in each ring (before the barrier), group B is the second.
-fn ring_phase_number(ring_index: usize, group: Group, slot: Slot) -> u8 {
-    match (ring_index, group, slot) {
-        (0, Group::A, Slot::First) => 1,
-        (0, Group::A, Slot::Second) => 2,
-        (0, Group::B, Slot::First) => 3,
-        (0, Group::B, Slot::Second) => 4,
-        (1, Group::A, Slot::First) => 5,
-        (1, Group::A, Slot::Second) => 6,
-        (1, Group::B, Slot::First) => 7,
-        (1, Group::B, Slot::Second) => 8,
-        _ => unreachable!("only two rings, two groups and two slots exist"),
-    }
-}
-
-// Bitmask of the four phases that belong to one barrier group (both rings).
-fn group_mask(group: Group) -> u8 {
-    let numbers: [u8; 4] = match group {
-        Group::A => [1, 2, 5, 6],
-        Group::B => [3, 4, 7, 8],
-    };
-    numbers
-        .iter()
-        .fold(0, |mask, &number| mask | PhaseId::new(number).unwrap().bit())
-}
-
 struct RingState {
-    slot: Slot,
+    phase: PhaseId,
     interval: Interval,
     elapsed_seconds: u32,
     gap_remaining: u32,
@@ -232,21 +207,10 @@ struct RingState {
 }
 
 impl RingState {
-    fn parked() -> Self {
+    fn new(phase: PhaseId) -> Self {
         Self {
-            slot: Slot::First,
+            phase,
             interval: Interval::Red,
-            elapsed_seconds: 0,
-            gap_remaining: 0,
-            maximum_elapsed: None,
-            ready: false,
-        }
-    }
-
-    fn green(slot: Slot) -> Self {
-        Self {
-            slot,
-            interval: Interval::Green,
             elapsed_seconds: 0,
             gap_remaining: 0,
             maximum_elapsed: None,
@@ -262,6 +226,9 @@ pub struct IntersectionId(usize);
 pub struct Controller {
     id: IntersectionId,
     phases: Vec<Phase>,
+    // A traffic signal cycle is one complete set of signal phase sets.
+    // also can represent, phase rotation (phasing sequence): order of phase sets on conflicting calls
+    rotation: Vec<PhaseSet>,
     timing_chart: TimingChart,
 
     // external monitor checks controller for bad output (conflicts)
@@ -280,8 +247,8 @@ pub struct Controller {
     startup_remaining: u32,
     // manual control of the phase set timing by input
     // manual: bool,
-    group: Group,
     rings: [RingState; 2],
+    current_set: usize,
     /*
      * For a phase to be serviced it must first receive a call for service. A vehicle call is a
      * demand for the green interval of a vehicle phase while a pedestrian call is a demand
@@ -292,7 +259,7 @@ pub struct Controller {
 }
 
 impl Controller {
-    pub fn new(id: usize, phases: Vec<Phase>) -> Self {
+    pub fn new(id: usize, phases: Vec<Phase>, rotation: Vec<PhaseSet>) -> Self {
         assert_eq!(phases.len(), 8, "Configure phases 1 through 8");
 
         for number in 1..=8 {
@@ -300,16 +267,30 @@ impl Controller {
             assert_eq!(count, 1, "Each phase must be configured exactly once");
         }
 
+        let pairs = [[1, 5], [2, 6], [3, 7], [4, 8]];
+        assert_eq!(rotation.len(), pairs.len());
+
+        for (set, pair) in rotation.iter().zip(pairs) {
+            assert_eq!(set.phases.len(), 2);
+            assert_eq!(set.phases[0].0, pair[0]);
+            assert_eq!(set.phases[1].0, pair[1]);
+        }
+
+        let rings = [
+            RingState::new(rotation[0].phases[0]),
+            RingState::new(rotation[0].phases[1]),
+        ];
         let startup_seconds = 5;
 
         Self {
             id: IntersectionId(id),
             phases,
+            rotation,
             timing_chart: TimingChart::new(),
             startup_seconds,
             startup_remaining: u32::from(startup_seconds),
-            group: Group::A,
-            rings: [RingState::parked(), RingState::parked()],
+            rings,
+            current_set: 0,
             pending_calls: 0,
             elapsed_seconds: 0,
         }
@@ -319,76 +300,64 @@ impl Controller {
         self.phases.iter().find(|phase| phase.id == id).unwrap()
     }
 
+    fn set_mask(&self, index: usize) -> u8 {
+        self.rotation[index]
+            .phases
+            .iter()
+            .fold(0, |mask, phase| mask | phase.bit())
+    }
+
     fn demand(&self) -> u8 {
         self.pending_calls | self.timing_chart.min_recall
     }
 
-    // A ring should stop resting and start timing toward ending its current
-    // phase only when there's demand it can actually act on: its own next
-    // phase within this barrier group, or anything waiting in the other
-    // group (since parking to help cross the barrier is the only way to
-    // eventually reach it). Demand for the OTHER ring's own succession phase
-    // (e.g. phase 2 while this ring sits on phase 5) is not this ring's
-    // concern — it can keep resting while the other ring handles it alone.
-    fn ring_wants_to_advance(&self, index: usize) -> bool {
-        let demand = self.demand();
-        let ring = &self.rings[index];
-
-        let own_succession = ring.slot == Slot::First && {
-            let second = ring_phase_number(index, self.group, Slot::Second);
-            demand & PhaseId::new(second).unwrap().bit() != 0
-        };
-
-        own_succession || demand & group_mask(self.group.flip()) != 0
+    fn has_conflicting_call(&self) -> bool {
+        self.demand() & !self.set_mask(self.current_set) != 0
     }
 
-    fn enter_group(&mut self, group: Group) {
-        self.group = group;
-        self.rings = [RingState::parked(), RingState::parked()];
+    fn start_phase_set(&mut self, index: usize) {
+        self.current_set = index;
+        self.pending_calls &= !self.set_mask(index);
+        let conflicting_call = self.has_conflicting_call();
 
-        for index in 0..2 {
-            self.try_resume_ring(index);
-        }
-    }
+        for (ring, &phase) in self.rings.iter_mut().zip(&self.rotation[index].phases) {
+            *ring = RingState::new(phase);
+            ring.interval = Interval::Green;
 
-    // A parked ring (waiting at the barrier) picks back up as soon as either
-    // of its two phases in the current group has demand, skipping straight
-    // to the second phase if the first has none (matches real phase-skip
-    // behavior rather than always serving the first phase regardless).
-    fn try_resume_ring(&mut self, index: usize) {
-        if self.rings[index].interval != Interval::Red {
-            return;
-        }
-
-        let demand = self.demand();
-        let first = PhaseId::new(ring_phase_number(index, self.group, Slot::First)).unwrap();
-        let second = PhaseId::new(ring_phase_number(index, self.group, Slot::Second)).unwrap();
-
-        if demand & first.bit() != 0 {
-            self.rings[index] = RingState::green(Slot::First);
-            self.pending_calls &= !first.bit();
-        } else if demand & second.bit() != 0 {
-            self.rings[index] = RingState::green(Slot::Second);
-            self.pending_calls &= !second.bit();
-        }
-    }
-
-    // Runs the per-ring min/gap/max countdown for every ring still resting
-    // in green, independent of whatever the other ring is doing.
-    fn update_green_readiness(&mut self) {
-        for index in 0..2 {
-            if self.rings[index].interval != Interval::Green || self.rings[index].ready {
-                continue;
+            if conflicting_call {
+                ring.maximum_elapsed = Some(0);
             }
+        }
+    }
 
-            let wants_to_advance = self.ring_wants_to_advance(index);
-            let number = ring_phase_number(index, self.group, self.rings[index].slot);
-            let phase = self.phase(PhaseId::new(number).unwrap()).clone();
+    fn start_interval(&mut self, interval: Interval) {
+        for ring in &mut self.rings {
+            ring.interval = interval;
+            ring.elapsed_seconds = 0;
+        }
+    }
+
+    fn next_phase_set(&self) -> usize {
+        for offset in 1..=self.rotation.len() {
+            let index = (self.current_set + offset) % self.rotation.len();
+            if self.demand() & self.set_mask(index) != 0 {
+                return index;
+            }
+        }
+
+        self.current_set
+    }
+
+    fn step_green(&mut self) {
+        let conflicting_call = self.has_conflicting_call();
+
+        for index in 0..self.rings.len() {
+            let phase = self.phase(self.rings[index].phase).clone();
             let ring = &mut self.rings[index];
 
             ring.gap_remaining = ring.gap_remaining.saturating_sub(1);
 
-            if !wants_to_advance {
+            if !conflicting_call || ring.ready {
                 continue;
             }
 
@@ -399,68 +368,24 @@ impl Controller {
                 ring.ready = ring.gap_remaining == 0 || *maximum >= u32::from(phase.max_seconds);
             }
         }
-    }
 
-    // Advances one ring's own Green -> Yellow -> RedClearance -> (next slot
-    // or parked at the barrier) sequence, entirely independent of the other ring.
-    fn step_ring(&mut self, index: usize) {
-        let number = ring_phase_number(index, self.group, self.rings[index].slot);
-        let phase = self.phase(PhaseId::new(number).unwrap()).clone();
-        let ring = &mut self.rings[index];
-
-        match ring.interval {
-            Interval::Green => {
-                if ring.ready {
-                    ring.interval = Interval::Yellow;
-                    ring.elapsed_seconds = 0;
-                }
-            }
-            Interval::Yellow => {
-                if ring.elapsed_seconds >= u32::from(phase.yellow_seconds) {
-                    ring.interval = Interval::RedClearance;
-                    ring.elapsed_seconds = 0;
-                }
-            }
-            Interval::RedClearance => {
-                if ring.elapsed_seconds >= u32::from(phase.red_seconds) {
-                    self.advance_ring(index);
-                }
-            }
-            Interval::Red => {}
+        if self.rings.iter().all(|ring| ring.ready) {
+            self.start_interval(Interval::Yellow);
         }
     }
 
-    // Called once a ring finishes clearing its current phase: either moves on
-    // to the group's second phase (if it has demand) or parks at the barrier.
-    fn advance_ring(&mut self, index: usize) {
-        let slot = self.rings[index].slot;
-
-        if slot == Slot::First {
-            let second = ring_phase_number(index, self.group, Slot::Second);
-            let id = PhaseId::new(second).unwrap();
-
-            if self.demand() & id.bit() != 0 {
-                self.pending_calls &= !id.bit();
-                self.rings[index] = RingState::green(Slot::Second);
-                return;
-            }
-        }
-
-        self.rings[index] = RingState::parked();
-    }
-
-    // Both rings cross the barrier together only once both have parked, and
-    // only if the other side actually has something to serve - otherwise an
-    // idle intersection would flip barriers every single tick for no reason.
-    fn try_cross_barrier(&mut self) {
-        if !self.rings.iter().all(|ring| ring.interval == Interval::Red) {
-            return;
-        }
-
-        let next = self.group.flip();
-        if self.demand() & group_mask(next) != 0 {
-            self.enter_group(next);
-        }
+    fn clearance_seconds(&self, interval: Interval) -> u32 {
+        self.rings
+            .iter()
+            .map(|ring| {
+                let phase = self.phase(ring.phase);
+                match interval {
+                    Interval::Yellow => u32::from(phase.yellow_seconds),
+                    _ => u32::from(phase.red_seconds),
+                }
+            })
+            .max()
+            .unwrap()
     }
 }
 
@@ -485,7 +410,14 @@ impl Controller {
             })
             .collect();
 
-        let mut controller = Controller::new(0, phases);
+        let rotation = vec![
+            PhaseSet::new(1, PhaseId(1), PhaseId(5)),
+            PhaseSet::new(2, PhaseId(2), PhaseId(6)),
+            PhaseSet::new(3, PhaseId(3), PhaseId(7)),
+            PhaseSet::new(4, PhaseId(4), PhaseId(8)),
+        ];
+
+        let mut controller = Controller::new(0, phases, rotation);
         // Matches the paper's own example: minimum recall on the main-street
         // through phases only, so they rest in green absent conflicting demand.
         // Every other phase is purely actuated and is skipped when uncalled.
@@ -500,7 +432,7 @@ impl Controller {
         if self.startup_remaining > 0 {
             self.startup_remaining -= 1;
             if self.startup_remaining == 0 {
-                self.enter_group(Group::A);
+                self.start_phase_set(0);
             }
             return;
         }
@@ -509,13 +441,20 @@ impl Controller {
             ring.elapsed_seconds += 1;
         }
 
-        self.update_green_readiness();
-
-        for index in 0..2 {
-            self.step_ring(index);
+        match self.rings[0].interval {
+            Interval::Green => self.step_green(),
+            Interval::Yellow => {
+                if self.rings[0].elapsed_seconds >= self.clearance_seconds(Interval::Yellow) {
+                    self.start_interval(Interval::RedClearance);
+                }
+            }
+            Interval::RedClearance => {
+                if self.rings[0].elapsed_seconds >= self.clearance_seconds(Interval::RedClearance) {
+                    self.start_phase_set(self.next_phase_set());
+                }
+            }
+            Interval::Red => {}
         }
-
-        self.try_cross_barrier();
     }
 
     // A red/yellow call latches. A green hit restarts passage time.
@@ -524,30 +463,31 @@ impl Controller {
             return false;
         };
 
-        for index in 0..2 {
-            let ring = &self.rings[index];
-            if ring.interval != Interval::Green {
-                continue;
-            }
-            if ring_phase_number(index, self.group, ring.slot) != number {
-                continue;
-            }
-
-            let passage = u32::from(self.phase(id).pass_seconds);
-            let ring = &mut self.rings[index];
-            if !ring.ready {
-                ring.gap_remaining = ring.gap_remaining.max(passage);
+        // Both rings in the current set are serviced simultaneously, so a hit on
+        // either phase of the active pair restarts passage time for both of them.
+        if self
+            .rings
+            .iter()
+            .any(|ring| ring.phase == id && ring.interval == Interval::Green)
+        {
+            let passages: Vec<u32> = self
+                .rings
+                .iter()
+                .map(|ring| u32::from(self.phase(ring.phase).pass_seconds))
+                .collect();
+            for (ring, passage) in self.rings.iter_mut().zip(passages) {
+                if !ring.ready {
+                    ring.gap_remaining = ring.gap_remaining.max(passage);
+                }
             }
             return true;
         }
 
         self.pending_calls |= id.bit();
 
-        if self.startup_remaining == 0 {
-            for index in 0..2 {
-                if self.rings[index].interval == Interval::Green && self.ring_wants_to_advance(index) {
-                    self.rings[index].maximum_elapsed.get_or_insert(0);
-                }
+        if self.startup_remaining == 0 && self.rings[0].interval == Interval::Green {
+            for ring in &mut self.rings {
+                ring.maximum_elapsed.get_or_insert(0);
             }
         }
 
@@ -557,30 +497,22 @@ impl Controller {
     pub fn set_min_recall(&mut self, mask: u8) {
         self.timing_chart.min_recall = mask;
 
-        if self.startup_remaining > 0 {
-            return;
-        }
-
-        for index in 0..2 {
-            if self.rings[index].interval != Interval::Green {
-                continue;
-            }
-            if self.ring_wants_to_advance(index) {
-                self.rings[index].maximum_elapsed.get_or_insert(0);
-            } else {
-                self.rings[index].maximum_elapsed = None;
-                self.rings[index].ready = false;
+        if self.startup_remaining == 0 && self.rings[0].interval == Interval::Green {
+            let conflicting_call = self.has_conflicting_call();
+            for ring in &mut self.rings {
+                if conflicting_call {
+                    ring.maximum_elapsed.get_or_insert(0);
+                } else {
+                    ring.maximum_elapsed = None;
+                    ring.ready = false;
+                }
             }
         }
     }
 
     pub fn signal(&self, number: u8) -> Interval {
-        for index in 0..2 {
-            let ring = &self.rings[index];
-            if ring.interval == Interval::Red {
-                continue;
-            }
-            if ring_phase_number(index, self.group, ring.slot) == number {
+        for ring in &self.rings {
+            if ring.phase.0 == number {
                 return ring.interval;
             }
         }
@@ -594,30 +526,20 @@ impl Controller {
 
     // Seconds the phase has been green, if it is one of the two active rings.
     pub fn ring_elapsed(&self, number: u8) -> Option<u32> {
-        for index in 0..2 {
-            let ring = &self.rings[index];
-            if ring.interval == Interval::Green
-                && ring_phase_number(index, self.group, ring.slot) == number
-            {
-                return Some(ring.elapsed_seconds);
-            }
-        }
-
-        None
+        let id = PhaseId::new(number)?;
+        self.rings
+            .iter()
+            .find(|ring| ring.phase == id && ring.interval == Interval::Green)
+            .map(|ring| ring.elapsed_seconds)
     }
 
     // Passage time left before this phase's green could gap out, if active.
     pub fn ring_gap(&self, number: u8) -> Option<u32> {
-        for index in 0..2 {
-            let ring = &self.rings[index];
-            if ring.interval == Interval::Green
-                && ring_phase_number(index, self.group, ring.slot) == number
-            {
-                return Some(ring.gap_remaining);
-            }
-        }
-
-        None
+        let id = PhaseId::new(number)?;
+        self.rings
+            .iter()
+            .find(|ring| ring.phase == id && ring.interval == Interval::Green)
+            .map(|ring| ring.gap_remaining)
     }
 
     pub fn time(&self) -> u32 {
@@ -639,7 +561,7 @@ impl Controller {
     }
 
     pub fn reset(&mut self) {
-        let mut controller = Controller::new(self.id.0, self.phases.clone());
+        let mut controller = Controller::new(self.id.0, self.phases.clone(), self.rotation.clone());
         controller.timing_chart.min_recall = self.timing_chart.min_recall;
         *self = controller;
     }
@@ -687,11 +609,7 @@ impl fmt::Display for Controller {
         if self.startup_remaining > 0 {
             writeln!(f, "STARTUP ALL RED  {}s", self.startup_remaining)?;
         } else {
-            let group = match self.group {
-                Group::A => "A",
-                Group::B => "B",
-            };
-            writeln!(f, "BARRIER GROUP {group}")?;
+            writeln!(f, "PHASE SET {}", self.rotation[self.current_set].id.0)?;
         }
 
         write!(f, "PHASE ")?;
@@ -736,8 +654,7 @@ impl fmt::Display for Controller {
             "RING", "PHASE", "INTERVAL", "ELAPSED", "MIN", "GAP", "MAX",
         )?;
         for (index, ring) in self.rings.iter().enumerate() {
-            let phase_number = ring_phase_number(index, self.group, ring.slot);
-            let phase = self.phase(PhaseId::new(phase_number).unwrap());
+            let phase = self.phase(ring.phase);
             let interval = match ring.interval {
                 Interval::Red => "Red",
                 Interval::Green => "Green",
@@ -771,7 +688,7 @@ impl fmt::Display for Controller {
                 f,
                 "{:>4} {:>6}  {:<14} {:>7}  {:>3}  {:>3}  {:>3}  {}",
                 index + 1,
-                phase_number,
+                ring.phase.0,
                 interval,
                 ring.elapsed_seconds,
                 min,
