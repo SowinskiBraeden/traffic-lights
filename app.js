@@ -1,24 +1,27 @@
 import init, { Controller, Interval } from './pkg/traffic_lights.js';
 
+// min/max/pass mirror Controller::demo()'s defaults in src/lib.rs, modeled
+// after a Siemens M60 timing chart: main street > side street > left turns.
 const phases = [
-  { id: 1, label: 'West left', path: 'M200 342H264C289 342 342 289 342 264V200', x: 196, y: 342, labelX: 166, labelY: 348 },
-  { id: 2, label: 'East through', path: 'M440 254H200', x: 444, y: 254, labelX: 474, labelY: 260 },
-  { id: 3, label: 'North left', path: 'M298 200V264C298 289 351 342 376 342H440', x: 298, y: 196, labelX: 298, labelY: 168 },
-  { id: 4, label: 'South through', path: 'M386 440V200', x: 386, y: 444, labelX: 386, labelY: 483 },
-  { id: 5, label: 'East left', path: 'M440 298H376C351 298 298 351 298 376V440', x: 444, y: 298, labelX: 474, labelY: 304 },
-  { id: 6, label: 'West through', path: 'M200 386H440', x: 196, y: 386, labelX: 166, labelY: 392 },
-  { id: 7, label: 'South left', path: 'M342 440V376C342 351 289 298 264 298H200', x: 342, y: 444, labelX: 342, labelY: 483 },
-  { id: 8, label: 'North through', path: 'M254 200V440', x: 254, y: 196, labelX: 254, labelY: 168 },
+  { id: 1, label: 'West left', path: 'M200 342H264C289 342 342 289 342 264V200', x: 196, y: 342, labelX: 166, labelY: 348, min: 5, max: 20, pass: 3 },
+  { id: 2, label: 'East through', path: 'M440 254H200', x: 444, y: 254, labelX: 474, labelY: 260, min: 15, max: 50, pass: 4 },
+  { id: 3, label: 'North left', path: 'M298 200V264C298 289 351 342 376 342H440', x: 298, y: 196, labelX: 298, labelY: 168, min: 5, max: 15, pass: 3 },
+  { id: 4, label: 'South through', path: 'M386 440V200', x: 386, y: 444, labelX: 386, labelY: 483, min: 10, max: 35, pass: 3 },
+  { id: 5, label: 'East left', path: 'M440 298H376C351 298 298 351 298 376V440', x: 444, y: 298, labelX: 474, labelY: 304, min: 5, max: 20, pass: 3 },
+  { id: 6, label: 'West through', path: 'M200 386H440', x: 196, y: 386, labelX: 166, labelY: 392, min: 15, max: 50, pass: 4 },
+  { id: 7, label: 'South left', path: 'M342 440V376C342 351 289 298 264 298H200', x: 342, y: 444, labelX: 342, labelY: 483, min: 5, max: 15, pass: 3 },
+  { id: 8, label: 'North through', path: 'M254 200V440', x: 254, y: 196, labelX: 254, labelY: 168, min: 10, max: 35, pass: 3 },
 ];
 
 const byId = (id) => document.getElementById(id);
 let controller;
 let timer = null;
 
-// Relative arrival likelihood per simulated second: main street busier than
-// the side street, through movements busier than their paired left turn.
-const ARRIVAL_CHANCE = { 1: .12, 2: .35, 3: .1, 4: .22, 5: .12, 6: .35, 7: .1, 8: .22 };
-const QUEUE_CAP = 4;
+// Relative arrival likelihood per simulated second: through movements busier
+// than their paired left turn, and the main street (1/2/5/6) only slightly
+// busier than the side street (3/4/7/8) within each movement type.
+const ARRIVAL_CHANCE = { 1: .13, 2: .27, 3: .11, 4: .22, 5: .13, 6: .27, 7: .11, 8: .22 };
+const QUEUE_CAP = 6;
 const TRANSIT_MS = 850;
 
 // Each car is { id, phase, state: 'queued' | 'moving', moveStart? }.
@@ -30,10 +33,12 @@ const cars = [];
 function spawnRandomTraffic() {
   if (!byId('random-traffic').checked) return;
   for (const phase of phases) {
-	const queued = cars.filter((car) => car.phase === phase.id && car.state === 'queued').length;
-	if (queued < QUEUE_CAP && Math.random() < ARRIVAL_CHANCE[phase.id]) {
-	  cars.push({ id: nextCarId++, phase: phase.id, state: 'queued' });
+	// The detector fires on the roll alone, same as a real vehicle arriving;
+	// QUEUE_CAP only limits how many waiting cars get drawn, never demand.
+	if (Math.random() < ARRIVAL_CHANCE[phase.id]) {
 	  controller.call(phase.id);
+	  const queued = cars.filter((car) => car.phase === phase.id && car.state === 'queued').length;
+	  if (queued < QUEUE_CAP) cars.push({ id: nextCarId++, phase: phase.id, state: 'queued' });
 	}
   }
 }
@@ -131,9 +136,9 @@ function buildControls() {
   byId('phase-timing').innerHTML = phases.map((phase) => `
 	<tr>
 	  <th scope="row">${phase.id}</th><td>${phase.label}</td>
-	  <td><input class="form-control form-control-sm" id="min-${phase.id}" aria-label="Phase ${phase.id} minimum green seconds" type="number" min="1" max="255" step="1" value="${phase.id % 2 ? 5 : 8}" required></td>
-	  <td><input class="form-control form-control-sm" id="max-${phase.id}" aria-label="Phase ${phase.id} maximum green seconds" type="number" min="1" max="255" step="1" value="${phase.id % 2 ? 15 : 25}" required></td>
-	  <td><input class="form-control form-control-sm" id="pass-${phase.id}" aria-label="Phase ${phase.id} passage seconds" type="number" min="1" max="255" step="1" value="3" required></td>
+	  <td><input class="form-control form-control-sm" id="min-${phase.id}" aria-label="Phase ${phase.id} minimum green seconds" type="number" min="1" max="255" step="1" value="${phase.min}" required></td>
+	  <td><input class="form-control form-control-sm" id="max-${phase.id}" aria-label="Phase ${phase.id} maximum green seconds" type="number" min="1" max="255" step="1" value="${phase.max}" required></td>
+	  <td><input class="form-control form-control-sm" id="pass-${phase.id}" aria-label="Phase ${phase.id} passage seconds" type="number" min="1" max="255" step="1" value="${phase.pass}" required></td>
 	</tr>
   `).join('');
 

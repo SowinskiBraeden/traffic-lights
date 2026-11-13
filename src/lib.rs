@@ -90,7 +90,7 @@ impl Phase {
             min_seconds,
             max_seconds,
             pass_seconds,
-            yellow_seconds: 3,
+            yellow_seconds: 4,
             red_seconds: 1,
         }
     }
@@ -392,15 +392,21 @@ impl Controller {
 #[wasm_bindgen]
 impl Controller {
     pub fn demo() -> Self {
+        // Modeled after a Siemens M60 default timing chart: the main street
+        // (2/6) carries the most green, the side street (4/8) less, and both
+        // left-turn pairs (1/5, 3/7) get short, actuated-only allocations.
         let phases = (1..=8)
             .map(|number| {
                 let id = PhaseId::new(number).unwrap();
+                let (min, max, pass) = match number {
+                    2 | 6 => (15, 50, 4),
+                    4 | 8 => (10, 35, 3),
+                    1 | 5 => (5, 20, 3),
+                    3 | 7 => (5, 15, 3),
+                    _ => unreachable!(),
+                };
 
-                if number % 2 == 0 {
-                    Phase::new(id, 8, 25, 3)
-                } else {
-                    Phase::new(id, 5, 15, 3)
-                }
+                Phase::new(id, min, max, pass)
             })
             .collect();
 
