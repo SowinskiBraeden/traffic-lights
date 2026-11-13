@@ -412,7 +412,10 @@ impl Controller {
         ];
 
         let mut controller = Controller::new(0, phases, rotation);
-        controller.timing_chart.min_recall = u8::MAX;
+        // Matches the paper's own example: minimum recall on the main-street
+        // through phases only, so they rest in green absent conflicting demand.
+        // Every other phase is purely actuated and is skipped when uncalled.
+        controller.timing_chart.min_recall = PhaseId::new(2).unwrap().bit() | PhaseId::new(6).unwrap().bit();
         controller
     }
 
@@ -453,15 +456,25 @@ impl Controller {
         let Some(id) = PhaseId::new(number) else {
             return false;
         };
-        let passage = u32::from(self.phase(id).pass_seconds);
 
-        for ring in &mut self.rings {
-            if ring.phase == id && ring.interval == Interval::Green {
+        // Both rings in the current set are serviced simultaneously, so a hit on
+        // either phase of the active pair restarts passage time for both of them.
+        if self
+            .rings
+            .iter()
+            .any(|ring| ring.phase == id && ring.interval == Interval::Green)
+        {
+            let passages: Vec<u32> = self
+                .rings
+                .iter()
+                .map(|ring| u32::from(self.phase(ring.phase).pass_seconds))
+                .collect();
+            for (ring, passage) in self.rings.iter_mut().zip(passages) {
                 if !ring.ready {
-                    ring.gap_remaining = passage;
+                    ring.gap_remaining = ring.gap_remaining.max(passage);
                 }
-                return true;
             }
+            return true;
         }
 
         self.pending_calls |= id.bit();
@@ -503,6 +516,24 @@ impl Controller {
 
     pub fn pending_calls(&self) -> u8 {
         self.pending_calls
+    }
+
+    // Seconds the phase has been green, if it is one of the two active rings.
+    pub fn ring_elapsed(&self, number: u8) -> Option<u32> {
+        let id = PhaseId::new(number)?;
+        self.rings
+            .iter()
+            .find(|ring| ring.phase == id && ring.interval == Interval::Green)
+            .map(|ring| ring.elapsed_seconds)
+    }
+
+    // Passage time left before this phase's green could gap out, if active.
+    pub fn ring_gap(&self, number: u8) -> Option<u32> {
+        let id = PhaseId::new(number)?;
+        self.rings
+            .iter()
+            .find(|ring| ring.phase == id && ring.interval == Interval::Green)
+            .map(|ring| ring.gap_remaining)
     }
 
     pub fn time(&self) -> u32 {
@@ -622,7 +653,7 @@ impl fmt::Display for Controller {
                 Interval::Red => "Red",
                 Interval::Green => "Green",
                 Interval::Yellow => "Yellow",
-                Interval::RedClearance => "RedClearance",
+                Interval::RedClearance => "Clearance",
             };
             let green = ring.interval == Interval::Green;
             let min = if green {

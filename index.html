@@ -30,6 +30,10 @@
 		  <option value="2">2×</option>
 		  <option value="4">4×</option>
 		</select>
+		<div class="form-check form-switch ms-sm-2 mb-0">
+		  <input class="form-check-input" type="checkbox" role="switch" id="random-traffic" disabled>
+		  <label class="form-check-label small" for="random-traffic">Random traffic</label>
+		</div>
 		<div class="ms-sm-auto d-flex align-items-center gap-3">
 		  <span id="run-state" class="small text-secondary" role="status">Loading WASM…</span>
 		  <output id="clock" class="font-monospace fw-bold">00:00</output>
@@ -72,7 +76,8 @@
 			  <text x="24" y="216">WEST · MAIN</text>
 			  <text x="616" y="438" text-anchor="end">EAST · MAIN</text>
 			</g>
-			<g id="movements" fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"></g>
+			<g id="movements" fill="none" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"></g>
+			<g id="cars" fill="#4dabf7" stroke="#1864ab" stroke-width="1.5"></g>
 			<g id="lights"></g>
 		  </svg>
 		  <div class="d-flex gap-3 flex-wrap small mt-2">
