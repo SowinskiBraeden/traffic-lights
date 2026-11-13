@@ -101,7 +101,13 @@
 
 	<details class="panel mb-3" open>
 	  <summary class="h6 mb-0">Controller display</summary>
-	  <div class="d-flex justify-content-end mt-2">
+	  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-2">
+		<div class="btn-group btn-group-sm" role="group" aria-label="Controller display view">
+		  <input type="radio" class="btn-check" name="screen-view" id="view-live" value="live" autocomplete="off" checked>
+		  <label class="btn btn-outline-secondary" for="view-live">Live</label>
+		  <input type="radio" class="btn-check" name="screen-view" id="view-configured" value="configured" autocomplete="off">
+		  <label class="btn btn-outline-secondary" for="view-configured">Configured</label>
+		</div>
 		<div class="form-check form-switch mb-0">
 		  <input class="form-check-input" type="checkbox" role="switch" id="lcd-toggle">
 		  <label class="form-check-label small" for="lcd-toggle">LCD display</label>
@@ -129,15 +135,17 @@
 	  </form>
 	</details>
 
-	<footer class="d-flex justify-content-between gap-3 small text-secondary pb-2">
+	<footer class="d-flex align-items-center justify-content-between gap-3 small text-secondary pb-2">
 	  <span>Fixed pairs: 1/5 → 2/6 → 3/7 → 4/8</span>
-		<svg class="icon" aria-hidden="true"><use href="/icons.svg#chip" /></svg>
+	  <div class="d-flex align-items-center gap-2">
+		<svg class="icon" aria-hidden="true"><use href="./icons.svg#chip" /></svg>
 		<span>Rust/WebAssembly demo</span>
-		<span class="dot">&middot;</span>
-		<a href="https://git.sowinski.dev/SowinskiBraeden/traffic-lights" target="_blank" rel="noreferrer">
-		<svg class="icon" aria-hidden="true"><use href="/icons.svg#gitea" /></svg>
-		Source
+		<span class="dot" aria-hidden="true">&middot;</span>
+		<a class="d-inline-flex align-items-center gap-1" href="https://git.sowinski.dev/SowinskiBraeden/traffic-lights" target="_blank" rel="noreferrer">
+		  <svg class="icon" aria-hidden="true"><use href="./icons.svg#gitea" /></svg>
+		  Source
 		</a>
+	  </div>
 	</footer>
   </main>
   <script type="module" src="./app.js"></script>

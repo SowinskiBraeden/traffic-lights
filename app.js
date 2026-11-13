@@ -83,7 +83,8 @@ function render() {
 
   const seconds = controller.time();
   byId('clock').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
-  byId('controller-screen').textContent = controller.render();
+  const screenView = document.querySelector('input[name="screen-view"]:checked').value;
+  byId('controller-screen').textContent = screenView === 'configured' ? controller.render_timing() : controller.render();
   byId('signal-summary').textContent = green.length ? `Green: ${green.join(' / ')}`
 	: yellow.length ? `Yellow: ${yellow.join(' / ')}`
 	: clearing ? 'Red clearance Â· all red' : 'Startup Â· all red';
@@ -172,6 +173,7 @@ try {
   byId('lcd-toggle').addEventListener('change', () => {
 	byId('controller-screen').classList.toggle('lcd-mode', byId('lcd-toggle').checked);
   });
+  for (const el of document.querySelectorAll('input[name="screen-view"]')) el.addEventListener('change', render);
   for (const phase of phases) {
 	document.querySelector(`[data-call="${phase.id}"]`).addEventListener('click', () => {
 	  controller.call(phase.id);
