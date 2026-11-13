@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="An eight-phase traffic controller with a simple intersection display and timing controls.">
+  <title>Traffic controller</title>
+  <link rel="stylesheet" href="./vendor/bootstrap.min.css">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="border-bottom bg-white">
+	<div class="container py-3 d-flex align-items-center justify-content-between gap-3">
+	  <h1 class="h4 mb-0">Traffic controller</h1>
+	  <span class="small text-secondary">8 phases · Rust / WASM</span>
+	</div>
+  </header>
+
+  <main class="container py-3">
+	<div id="error" class="alert alert-danger d-none" role="alert"></div>
+
+	<section class="panel mb-3" aria-label="Simulation controls">
+	  <div class="d-flex align-items-center flex-wrap gap-2">
+		<button id="run" class="btn btn-primary" type="button" disabled>Run</button>
+		<button id="step" class="btn btn-outline-secondary" type="button" disabled>Step +1s</button>
+		<button id="reset" class="btn btn-outline-danger" type="button" disabled>Reset</button>
+		<label for="speed" class="ms-sm-2 small">Speed</label>
+		<select id="speed" class="form-select form-select-sm speed-select" disabled>
+		  <option value="1">1×</option>
+		  <option value="2">2×</option>
+		  <option value="4">4×</option>
+		</select>
+		<div class="ms-sm-auto d-flex align-items-center gap-3">
+		  <span id="run-state" class="small text-secondary" role="status">Loading WASM…</span>
+		  <output id="clock" class="font-monospace fw-bold">00:00</output>
+		</div>
+	  </div>
+	</section>
+
+	<div class="row g-3 mb-3">
+	  <div class="col-lg-7">
+		<section class="panel h-100">
+		  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+			<h2 class="h6 mb-0">Intersection</h2>
+			<span id="signal-summary" class="small font-monospace">All red</span>
+		  </div>
+		  <svg id="intersection" viewBox="0 0 640 640" role="img" aria-labelledby="map-title map-description">
+			<title id="map-title">Eight-phase intersection</title>
+			<desc id="map-description">West and east are the main road. Each approach has a through movement and a left turn. Numbered lights match the phase controls.</desc>
+			<defs>
+			  <marker id="arrow-off" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="3" markerHeight="3" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#899096"/></marker>
+			  <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="3" markerHeight="3" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#35c66a"/></marker>
+			  <marker id="arrow-yellow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="3" markerHeight="3" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#ffc107"/></marker>
+			</defs>
+			<rect width="640" height="640" fill="#eef0f2"/>
+			<rect x="232" width="176" height="640" fill="#45494e"/>
+			<rect y="232" width="640" height="176" fill="#45494e"/>
+			<g stroke="#f3cd44" stroke-width="2">
+			  <path d="M318 0V216 M322 0V216 M318 424V640 M322 424V640"/>
+			  <path d="M0 318H216 M0 322H216 M424 318H640 M424 322H640"/>
+			</g>
+			<g stroke="#bdc1c4" stroke-width="2" stroke-dasharray="14 12">
+			  <path d="M276 0V210 M364 0V210 M276 430V640 M364 430V640"/>
+			  <path d="M0 276H210 M0 364H210 M430 276H640 M430 364H640"/>
+			</g>
+			<g stroke="white" stroke-width="5">
+			  <path d="M234 218H314 M326 422H406 M218 326V406 M422 234V314"/>
+			</g>
+			<g fill="#202428" font-size="17" font-family="system-ui, sans-serif" font-weight="600">
+			  <text x="216" y="31" text-anchor="end">NORTH</text>
+			  <text x="425" y="623">SOUTH</text>
+			  <text x="24" y="216">WEST · MAIN</text>
+			  <text x="616" y="438" text-anchor="end">EAST · MAIN</text>
+			</g>
+			<g id="movements" fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"></g>
+			<g id="lights"></g>
+		  </svg>
+		  <div class="d-flex gap-3 flex-wrap small mt-2">
+			<span><i class="legend-light red"></i>Red</span>
+			<span><i class="legend-light yellow"></i>Yellow</span>
+			<span><i class="legend-light green"></i>Green</span>
+			<span class="text-secondary">Numbers identify phases.</span>
+		  </div>
+		</section>
+	  </div>
+
+	  <div class="col-lg-5">
+		<section class="panel h-100">
+		  <h2 class="h6 mb-3">Calls &amp; minimum recall</h2>
+		  <div class="table-responsive">
+			<table class="table table-sm align-middle phase-table mb-2">
+			  <thead><tr><th scope="col">Phase</th><th scope="col">Movement</th><th scope="col">Signal</th><th scope="col">Detector</th><th scope="col">Recall</th></tr></thead>
+			  <tbody id="phase-controls"></tbody>
+			</table>
+		  </div>
+		  <p class="small text-secondary mb-2">A call waits on red and resets passage time on green. Recall requests service automatically.</p>
+		  <p id="last-action" class="small mb-0 action-message" role="status">Ready to load.</p>
+		</section>
+	  </div>
+	</div>
+
+	<details class="panel mb-3" open>
+	  <summary class="h6 mb-0">Controller display</summary>
+	  <div class="d-flex justify-content-end mt-2">
+		<div class="form-check form-switch mb-0">
+		  <input class="form-check-input" type="checkbox" role="switch" id="lcd-toggle">
+		  <label class="form-check-label small" for="lcd-toggle">LCD display</label>
+		</div>
+	  </div>
+	  <pre id="controller-screen" class="mt-2 mb-0" aria-label="Current controller state">Loading controller…</pre>
+	</details>
+
+	<details class="panel mb-3" id="configuration">
+	  <summary class="h6 mb-0">Timing configuration</summary>
+	  <form id="timing-form" class="mt-3">
+		<div class="table-responsive">
+		  <table class="table table-sm align-middle timing-table">
+			<thead><tr><th scope="col">Phase</th><th scope="col">Movement</th><th scope="col">Min green (s)</th><th scope="col">Max green (s)</th><th scope="col">Passage (s)</th></tr></thead>
+			<tbody id="phase-timing"></tbody>
+		  </table>
+		</div>
+		<div class="d-flex flex-wrap align-items-end gap-3">
+		  <div><label class="form-label small" for="yellow">Yellow (s)</label><input id="yellow" class="form-control form-control-sm clearance-input" type="number" min="1" max="255" step="1" value="3" required></div>
+		  <div><label class="form-label small" for="red-clearance">Red clearance (s)</label><input id="red-clearance" class="form-control form-control-sm clearance-input" type="number" min="1" max="255" step="1" value="1" required></div>
+		  <button id="apply" type="submit" class="btn btn-primary btn-sm" disabled>Apply &amp; reset</button>
+		  <span class="small text-secondary">Changes restart with 5 seconds of all red.</span>
+		</div>
+		<p id="config-error" class="text-danger small mt-2 mb-0" role="alert"></p>
+	  </form>
+	</details>
+
+	<footer class="d-flex justify-content-between gap-3 small text-secondary pb-2">
+	  <span>Fixed pairs: 1/5 → 2/6 → 3/7 → 4/8</span>
+		<svg class="icon" aria-hidden="true"><use href="/icons.svg#chip" /></svg>
+		<span>Rust/WebAssembly demo</span>
+		<span class="dot">&middot;</span>
+		<a href="https://git.sowinski.dev/SowinskiBraeden/traffic-lights" target="_blank" rel="noreferrer">
+		<svg class="icon" aria-hidden="true"><use href="/icons.svg#gitea" /></svg>
+		Source
+		</a>
+	</footer>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

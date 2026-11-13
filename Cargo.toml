@@ -25,3 +25,9 @@ wasm-bindgen-test = "0.3.34"
 [profile.release]
 # Tell `rustc` to optimize for small code size.
 opt-level = "s"
+
+[package.metadata.wasm-pack.profile.release]
+# The wasm-opt available on this machine (binaryen 108) corrupts the
+# externref table that current wasm-bindgen emits, so skip it rather
+# than ship a build that fails WebAssembly.Table.grow() at runtime.
+wasm-opt = false

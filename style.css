@@ -1,0 +1,64 @@
+:root {
+  --bs-border-radius: .2rem;
+  --bs-border-radius-sm: .15rem;
+}
+
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./vendor/silkscreen.woff2') format('woff2');
+}
+
+body { background: #f5f5f5; color: #212529; }
+.container { max-width: 1180px; }
+.panel { background: white; border: 1px solid #b8bfc6; padding: 1rem; }
+.speed-select { width: 76px; }
+.btn { font-weight: 500; }
+#run, #step, #reset { min-width: 90px; }
+#clock { min-width: 5ch; font-size: 1.15rem; }
+#intersection { display: block; width: 100%; max-width: 520px; margin: 0 auto; }
+.legend-light { display: inline-block; width: 11px; height: 11px; margin-right: 5px; border: 1px solid #343a40; border-radius: 50%; }
+.red { background: #dc3545; }
+.yellow { background: #ffc107; }
+.green { background: #198754; }
+.phase-table { font-size: .875rem; }
+.phase-table td, .phase-table th { padding: .55rem .3rem; white-space: nowrap; }
+.phase-table th:last-child, .phase-table td:last-child { text-align: center; }
+.phase-table .form-check { display: inline-flex; min-height: 0; margin: 0; }
+.phase-table .form-check-input { cursor: pointer; margin-top: 0; }
+.signal-word { font-size: .7rem; font-weight: 700; display: inline-block; min-width: 54px; text-align: center; padding: 3px 4px; border: 1px solid currentColor; }
+.signal-red { color: #b02a37; background: #fff; }
+.signal-yellow { color: #212529; background: #ffc107; }
+.signal-green { color: white; background: #198754; border-color: #146c43; }
+.call-button { min-width: 54px; }
+.waiting { background: #0d6efd; color: white; }
+.action-message { min-height: 2.5em; border-top: 1px solid #dee2e6; padding-top: .6rem; }
+.timing-table { max-width: 780px; }
+.timing-table input { width: 84px; }
+.clearance-input { width: 110px; }
+summary { cursor: pointer; }
+#controller-screen { background: #f3f4f5; border: 1px solid #ced4da; padding: 1rem; font-size: .8rem; line-height: 1.6; white-space: pre; overflow-x: auto; }
+
+#controller-screen.lcd-mode {
+  background: #1a3fd6;
+  color: #ffffff;
+  font-family: 'Silkscreen', monospace;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+.movement { transition: stroke .1s; }
+.signal-box { fill: #202428; stroke: #f8f9fa; stroke-width: 1; }
+.phase-number { font: bold 16px system-ui, sans-serif; fill: white; text-anchor: middle; }
+.lamp-letter { font: bold 12px system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+
+@media (max-width: 575px) {
+  .panel { padding: .75rem; }
+  header .small { font-size: .7rem; }
+  .phase-table { font-size: .8rem; }
+  .phase-table td, .phase-table th { padding: .5rem .2rem; }
+  .call-button { min-width: 48px; font-size: .75rem; }
+  .signal-word { min-width: 44px; font-size: .6rem; }
+  footer { flex-wrap: wrap; }
+}
